@@ -11,12 +11,13 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.reactions = True
 intents.members = True
+
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 zones = ["A", "B", "C", "D", "E"]
 active_zones = zones.copy()
 
-players = {}  # user_id: {...}
+players = {}
 zone_loot = {}
 
 loot_pool = [
@@ -37,7 +38,7 @@ armor_protection = {
 
 join_message_id = None
 
-stats = {}  # user_id: {"kills": 0, "games_played": 0, "wins": 0}
+stats = {}
 
 def generate_loot():
     return random.sample(loot_pool, k=random.randint(1, 3))
@@ -46,7 +47,14 @@ def generate_loot():
 @bot.event
 async def on_ready():
     print(f'Bot connected as {bot.user}')
-    channel = bot.get_channel(1344370197351366697)
+    # Sinkronisasi slash command
+    try:
+        synced = await bot.tree.sync()
+        print(f"✅ Slash commands synced: {len(synced)} commands")
+    except Exception as e:
+        print(f"❌ Failed to sync slash commands: {e}")
+    
+    channel = bot.get_channel(1344370197351366697)  # Ganti dengan channel ID kamu
     if channel:
         msg = await channel.send("🎮 Klik ✅ untuk bergabung dalam Battle Royale!")
         await msg.add_reaction("✅")
@@ -77,31 +85,35 @@ async def on_raw_reaction_add(payload):
                 await channel.send(f"<@{user_id}> kamu sudah bergabung!")
 
 
-@bot.command()
-async def status(ctx):
-    user_id = ctx.author.id
+# Slash command /status
+@bot.tree.command(name="status", description="Lihat statusmu dalam game Battle Royale")
+async def status(interaction: discord.Interaction):
+    user_id = interaction.user.id
     if user_id in players:
         player = players[user_id]
-        await ctx.send(
-            f"{ctx.author.mention} | Zona: {player['zone']} | HP: {player['hp']} | Armor: {player['armor']} | Inventory: {player['inventory']} | Kill Streak: {player['kill_streak']} | Kills: {player['kills']}"
+        await interaction.response.send_message(
+            f"{interaction.user.mention} | Zona: {player['zone']} | HP: {player['hp']} | Armor: {player['armor']} | Inventory: {player['inventory']} | Kill Streak: {player['kill_streak']} | Kills: {player['kills']}",
+            ephemeral=True
         )
     else:
-        await ctx.send("Kamu belum join. Klik ✅ pada pesan join untuk bergabung.")
+        await interaction.response.send_message("Kamu belum join. Klik ✅ pada pesan join untuk bergabung.", ephemeral=True)
 
 
-@bot.command()
-async def stats(ctx):
-    user_id = ctx.author.id
+# Slash command /stats
+@bot.tree.command(name="stats", description="Lihat statistik permanenmu dalam game Battle Royale")
+async def stats_command(interaction: discord.Interaction):
+    user_id = interaction.user.id
     if user_id in stats:
         s = stats[user_id]
-        await ctx.send(
-            f"{ctx.author.mention} Statistik:\n"
+        await interaction.response.send_message(
+            f"{interaction.user.mention} Statistik:\n"
             f"🗡️ Kill: {s['kills']}\n"
             f"🎮 Game Played: {s['games_played']}\n"
-            f"🏆 Win: {s['wins']}"
+            f"🏆 Win: {s['wins']}",
+            ephemeral=True
         )
     else:
-        await ctx.send("Kamu belum memiliki statistik. Mulai dengan join game dulu ya.")
+        await interaction.response.send_message("Kamu belum memiliki statistik. Mulai dengan join game dulu ya.", ephemeral=True)
 
 
 @tasks.loop(seconds=30)
@@ -191,5 +203,6 @@ async def game_loop():
         players.clear()
         active_zones = zones.copy()
 
+
 bot.run(TOKEN)
-                
+        
