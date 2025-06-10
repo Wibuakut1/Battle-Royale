@@ -1,4 +1,3 @@
-
 import discord
 from discord.ext import commands, tasks
 import random
@@ -97,17 +96,14 @@ async def stats(ctx):
     if user_id in stats:
         s = stats[user_id]
         await ctx.send(
-            f"{ctx.author.mention} Statistik:
-"
-            f"🗡️ Kill: {s['kills']}
-"
-            f"🎮 Game Played: {s['games_played']}
-"
+            f"{ctx.author.mention} Statistik:\n"
+            f"🗡️ Kill: {s['kills']}\n"
+            f"🎮 Game Played: {s['games_played']}\n"
             f"🏆 Win: {s['wins']}"
         )
     else:
         await ctx.send("Kamu belum memiliki statistik. Mulai dengan join game dulu ya.")
-
+        
 
 @tasks.loop(seconds=30)
 async def game_loop():
@@ -190,8 +186,8 @@ async def game_loop():
         # Buat leaderboard kill sementara berdasarkan kills di game
         leaderboard = sorted(players.items(), key=lambda x: x[1].get("kills", 0), reverse=True)
 
-        leaderboard_text = "🏅 **Leaderboard Kill Sementara:**
-"
+        leaderboard_text = "🏅 **Leaderboard Kill Sementara:**"
+        
         for rank, (uid, pdata) in enumerate(leaderboard, start=1):
             user = await bot.fetch_user(uid)
             leaderboard_text += f"{rank}. {user.name} - Kill: {pdata.get('kills', 0)}\n"
