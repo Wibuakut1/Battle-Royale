@@ -16,7 +16,7 @@ bot = commands.Bot(command_prefix='/', intents=intents)
 zones = ["A", "B", "C", "D", "E"]
 active_zones = zones.copy()
 
-players = {}  # user_id: {"zone": "A", "hp": 100, "inventory": [], "armor": 0, "kill_streak": 0, "kills": 0}
+players = {}  # user_id: {...}
 zone_loot = {}
 
 loot_pool = [
@@ -37,7 +37,6 @@ armor_protection = {
 
 join_message_id = None
 
-# Statistik global, simpan per user_id
 stats = {}  # user_id: {"kills": 0, "games_played": 0, "wins": 0}
 
 def generate_loot():
@@ -47,14 +46,14 @@ def generate_loot():
 @bot.event
 async def on_ready():
     print(f'Bot connected as {bot.user}')
-    channel = discord.utils.get(bot.get_all_channels(), name='battle-royale')
+    channel = bot.get_channel(1344370197351366697)
     if channel:
         msg = await channel.send("🎮 Klik ✅ untuk bergabung dalam Battle Royale!")
         await msg.add_reaction("✅")
         global join_message_id
         join_message_id = msg.id
     else:
-        print("Channel 'battle-royale' tidak ditemukan.")
+        print("Channel ID 1344370197351366697 tidak ditemukan.")
     game_loop.start()
 
 
@@ -103,13 +102,13 @@ async def stats(ctx):
         )
     else:
         await ctx.send("Kamu belum memiliki statistik. Mulai dengan join game dulu ya.")
-        
+
 
 @tasks.loop(seconds=30)
 async def game_loop():
-    channel = discord.utils.get(bot.get_all_channels(), name='battle-royale')
+    channel = bot.get_channel(1344370197351366697)
     if not channel:
-        print("Channel 'battle-royale' tidak ditemukan.")
+        print("Channel ID 1344370197351366697 tidak ditemukan.")
         return
 
     global active_zones
@@ -162,7 +161,6 @@ async def game_loop():
 
                 if players[defender]["hp"] <= 0:
                     await channel.send(f"☠️ <@{defender}> telah dieliminasi!")
-                    # Update stats killer & reset kill streak defender
                     players[attacker]["kill_streak"] += 1
                     players[attacker]["kills"] += 1
                     stats[attacker]["kills"] += 1
@@ -183,19 +181,15 @@ async def game_loop():
         winner = alive[0]
         stats[winner]["wins"] += 1
 
-        # Buat leaderboard kill sementara berdasarkan kills di game
         leaderboard = sorted(players.items(), key=lambda x: x[1].get("kills", 0), reverse=True)
-
-        leaderboard_text = "🏅 **Leaderboard Kill Sementara:**"
-        
+        leaderboard_text = "🏅 **Leaderboard Kill Sementara:**\n"
         for rank, (uid, pdata) in enumerate(leaderboard, start=1):
             user = await bot.fetch_user(uid)
             leaderboard_text += f"{rank}. {user.name} - Kill: {pdata.get('kills', 0)}\n"
 
         await channel.send(f"🏆 <@{winner}> menang! Game selesai.\n\n{leaderboard_text}")
-
         players.clear()
         active_zones = zones.copy()
 
-
 bot.run(TOKEN)
+                
