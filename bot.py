@@ -1,5 +1,7 @@
 import discord
 from discord.ext import commands, tasks
+from discord import app_commands
+import asyncio
 import random
 import os
 from dotenv import load_dotenv
@@ -9,200 +11,142 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 
 intents = discord.Intents.default()
 intents.message_content = True
-intents.reactions = True
-intents.members = True
-
-bot = commands.Bot(command_prefix='/', intents=intents)
-
-zones = ["A", "B", "C", "D", "E"]
-active_zones = zones.copy()
+bot = commands.Bot(command_prefix="!", intents=intents)
+tree = bot.tree
 
 players = {}
-zone_loot = {}
+game_mode = "Solo"
+zones = ["Pochinki", "School", "Military Base", "Rozhok", "Georgopol"]
+current_zone = random.choice(zones)
+airdrop_items = ["Bazooka", "AWM", "M4A1", "AK47", "Armor Lv.3", "Armor Lv.2", "Armor Lv.1"]
+status_channel = None
 
-loot_pool = [
-    "AKM", "M4A1", "AWM", "Pistol",
-    "Peluru 5.56mm", "Peluru 7.62mm", "Bandage", "Medkit", "Armor Level 1"
-]
-
-weapon_damage = {
-    "M4A1": 35,
-    "AKM": 42,
-    "AWM": 90,
-    "Pistol": 20
-}
-
-armor_protection = {
-    "Armor Level 1": 15
-}
-
-join_message_id = None
-
-stats = {}
-
-def generate_loot():
-    return random.sample(loot_pool, k=random.randint(1, 3))
-
-
-@bot.event
-async def on_ready():
-    print(f'Bot connected as {bot.user}')
-    # Sinkronisasi slash command
-    try:
-        synced = await bot.tree.sync()
-        print(f"✅ Slash commands synced: {len(synced)} commands")
-    except Exception as e:
-        print(f"❌ Failed to sync slash commands: {e}")
-    
-    channel = bot.get_channel(1344370197351366697)  # Ganti dengan channel ID kamu
-    if channel:
-        msg = await channel.send("🎮 Klik ✅ untuk bergabung dalam Battle Royale!")
-        await msg.add_reaction("✅")
-        global join_message_id
-        join_message_id = msg.id
-    else:
-        print("Channel ID 1344370197351366697 tidak ditemukan.")
-    game_loop.start()
-
-
-@bot.event
-async def on_raw_reaction_add(payload):
-    if payload.message_id == join_message_id and str(payload.emoji) == "✅":
-        user_id = payload.user_id
-        if user_id == bot.user.id:
-            return
-        if user_id not in players:
-            zone = random.choice(active_zones)
-            players[user_id] = {"zone": zone, "hp": 100, "inventory": [], "armor": 0, "kill_streak": 0, "kills": 0}
-            stats.setdefault(user_id, {"kills": 0, "games_played": 0, "wins": 0})
-            stats[user_id]["games_played"] += 1
-            channel = bot.get_channel(payload.channel_id)
-            if channel:
-                await channel.send(f"<@{user_id}> bergabung di zona {zone}!")
-        else:
-            channel = bot.get_channel(payload.channel_id)
-            if channel:
-                await channel.send(f"<@{user_id}> kamu sudah bergabung!")
-
-
-# Slash command /status
-@bot.tree.command(name="status", description="Lihat statusmu dalam game Battle Royale")
-async def status(interaction: discord.Interaction):
-    user_id = interaction.user.id
-    if user_id in players:
-        player = players[user_id]
-        await interaction.response.send_message(
-            f"{interaction.user.mention} | Zona: {player['zone']} | HP: {player['hp']} | Armor: {player['armor']} | Inventory: {player['inventory']} | Kill Streak: {player['kill_streak']} | Kills: {player['kills']}",
-            ephemeral=True
-        )
-    else:
-        await interaction.response.send_message("Kamu belum join. Klik ✅ pada pesan join untuk bergabung.", ephemeral=True)
-
-
-# Slash command /stats
-@bot.tree.command(name="stats", description="Lihat statistik permanenmu dalam game Battle Royale")
-async def stats_command(interaction: discord.Interaction):
-    user_id = interaction.user.id
-    if user_id in stats:
-        s = stats[user_id]
-        await interaction.response.send_message(
-            f"{interaction.user.mention} Statistik:\n"
-            f"🗡️ Kill: {s['kills']}\n"
-            f"🎮 Game Played: {s['games_played']}\n"
-            f"🏆 Win: {s['wins']}",
-            ephemeral=True
-        )
-    else:
-        await interaction.response.send_message("Kamu belum memiliki statistik. Mulai dengan join game dulu ya.", ephemeral=True)
-
+@tasks.loop(minutes=2)
+async def shrink_zone():
+    global current_zone
+    current_zone = random.choice(zones)
+    summary = f"**Zone is shrinking! New zone:** {current_zone}\n"
+    for player_id, player in players.items():
+        if player["zone"] != current_zone:
+            player["hp"] -= 25
+            summary += f"<@{player_id}> took 25 zone damage. "
+            if player["hp"] <= 0:
+                player["status"] = "knocked" if player["mode"] == "Squad" else "dead"
+                summary += f"and is now **{player['status']}**\n"
+            else:
+                summary += f"(HP: {player['hp']})\n"
+    await send_embed("Zone Shrinking", summary)
 
 @tasks.loop(seconds=30)
-async def game_loop():
-    channel = bot.get_channel(1344370197351366697)
-    if not channel:
-        print("Channel ID 1344370197351366697 tidak ditemukan.")
-        return
+async def handle_battle():
+    zone_map = {}
+    logs = ""
+    for pid, p in players.items():
+        if p["status"] != "alive": continue
+        zone_map.setdefault(p["zone"], []).append(pid)
 
-    global active_zones
-    if len(active_zones) > 1:
-        active_zones = random.sample(active_zones, len(active_zones) - 1)
-        await channel.send(f"🌀 Zona mengecil! Zona aman: {', '.join(active_zones)}")
+    for zone, pids in zone_map.items():
+        if len(pids) < 2: continue
+        p1_id, p2_id = random.sample(pids, 2)
+        p1, p2 = players[p1_id], players[p2_id]
 
-        for user_id, info in players.items():
-            if info["zone"] not in active_zones:
-                new_zone = random.choice(active_zones)
-                info["zone"] = new_zone
-                await channel.send(f"🚶 <@{user_id}> dipindahkan ke zona {new_zone} agar aman.")
+        for attacker, defender, atk_id, def_id in [(p1, p2, p1_id, p2_id), (p2, p1, p2_id, p1_id)]:
+            if defender["status"] != "alive": continue
+            weapon = attacker.get("weapon")
+            headshot = random.random() < 0.1
 
-    for z in active_zones:
-        zone_loot[z] = generate_loot()
+            if weapon == "Bazooka":
+                defender["status"] = "knocked" if defender["mode"] == "Squad" else "dead"
+                logs += f"💥 <@{atk_id}> used **Bazooka** on <@{def_id}> — **{defender['status']}**!\n"
+                continue
 
-    for user_id, info in players.items():
-        zone = info["zone"]
-        if zone in zone_loot and zone_loot[zone]:
-            loot_given = random.choice(zone_loot[zone])
-            info["inventory"].append(loot_given)
-            if loot_given in armor_protection:
-                info["armor"] += armor_protection[loot_given]
-                await channel.send(f"🛡️ <@{user_id}> mendapatkan {loot_given} (+{armor_protection[loot_given]} armor)")
+            damage = 0
+            if weapon == "M4A1" or weapon == "AK47":
+                damage = random.randint(45, 55)
+            elif weapon == "AWM":
+                damage = random.randint(60, 100)
+            elif weapon == "Grenade":
+                damage = 60
+            elif weapon == "Vehicle":
+                damage = 95
             else:
-                await channel.send(f"🎁 <@{user_id}> menemukan: {loot_given} di zona {zone}")
+                damage = random.randint(20, 35)
 
-    zone_players = {}
-    for uid, info in players.items():
-        if info["hp"] > 0:
-            zone_players.setdefault(info["zone"], []).append(uid)
+            armor = defender.get("armor", 0)
+            if armor == 1:
+                damage -= 15
+            elif armor == 2:
+                damage -= 22
+            elif armor == 3:
+                damage -= 30
 
-    for zona, user_ids in zone_players.items():
-        if len(user_ids) >= 2:
-            await channel.send(f"💥 Pertempuran di zona {zona}!")
-            random.shuffle(user_ids)
-            for i in range(0, len(user_ids) - 1, 2):
-                attacker = user_ids[i]
-                defender = user_ids[i + 1]
+            if headshot:
+                defender["status"] = "knocked" if defender["mode"] == "Squad" else "dead"
+                logs += f"🎯 <@{atk_id}> got a **headshot** on <@{def_id}> — **{defender['status']}**!\n"
+                continue
 
-                atk_inv = players[attacker]["inventory"]
-                weapon = next((w for w in atk_inv if w in weapon_damage), None)
-                base_damage = weapon_damage.get(weapon, 10)
+            defender["hp"] -= max(0, damage)
+            if defender["hp"] <= 0:
+                defender["status"] = "knocked" if defender["mode"] == "Squad" else "dead"
+            logs += f"🔫 <@{atk_id}> hit <@{def_id}> with **{weapon}** for {damage} damage (HP: {max(0, defender['hp'])})\n"
+    if logs:
+        await send_embed("Zone Battle", logs)
 
-                defender_armor = players[defender]["armor"]
-                damage = max(base_damage - defender_armor, 1)
+@tasks.loop(minutes=1)
+async def red_zone():
+    zone = random.choice(zones)
+    logs = f"☢️ **Red Zone hits**: {zone}\n"
+    for pid, p in players.items():
+        if p["zone"] == zone and p["status"] == "alive":
+            dmg = random.randint(20, 60)
+            p["hp"] -= dmg
+            if p["hp"] <= 0:
+                p["status"] = "knocked" if p["mode"] == "Squad" else "dead"
+                logs += f"<@{pid}> took {dmg} damage and is now **{p['status']}**\n"
+            else:
+                logs += f"<@{pid}> took {dmg} damage (HP: {p['hp']})\n"
+    await send_embed("Red Zone Event", logs)
 
-                players[defender]["hp"] -= damage
-                await channel.send(f"🔫 <@{attacker}> menembak <@{defender}> dengan {weapon or 'tinju'} ({damage} damage)")
+async def send_embed(title, description):
+    if status_channel:
+        embed = discord.Embed(title=title, description=description, color=discord.Color.red())
+        await status_channel.send(embed=embed)
 
-                if players[defender]["hp"] <= 0:
-                    await channel.send(f"☠️ <@{defender}> telah dieliminasi!")
-                    players[attacker]["kill_streak"] += 1
-                    players[attacker]["kills"] += 1
-                    stats[attacker]["kills"] += 1
-                    players[defender]["kill_streak"] = 0
+@tree.command(name="start")
+async def start_game(interaction: discord.Interaction):
+    global status_channel
+    status_channel = interaction.channel
+    view = ModeSelect()
+    await interaction.response.send_message("Select game mode:", view=view, ephemeral=True)
 
-    for user_id, info in players.items():
-        if info["hp"] > 0:
-            healing_items = [item for item in info["inventory"] if item in ["Bandage", "Medkit"]]
-            if healing_items:
-                heal_item = healing_items[0]
-                heal_amount = 20 if heal_item == "Medkit" else 10
-                info["hp"] = min(info["hp"] + heal_amount, 100)
-                info["inventory"].remove(heal_item)
-                await channel.send(f"❤️ <@{user_id}> menggunakan {heal_item} dan pulih {heal_amount} HP (HP sekarang: {info['hp']})")
+class ModeSelect(discord.ui.View):
+    @discord.ui.button(label="Solo", style=discord.ButtonStyle.primary)
+    async def solo(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await setup_game(interaction, "Solo")
 
-    alive = [uid for uid, p in players.items() if p["hp"] > 0]
-    if len(alive) == 1 and len(players) > 0:
-        winner = alive[0]
-        stats[winner]["wins"] += 1
+    @discord.ui.button(label="Squad", style=discord.ButtonStyle.success)
+    async def squad(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await setup_game(interaction, "Squad")
 
-        leaderboard = sorted(players.items(), key=lambda x: x[1].get("kills", 0), reverse=True)
-        leaderboard_text = "🏅 **Leaderboard Kill Sementara:**\n"
-        for rank, (uid, pdata) in enumerate(leaderboard, start=1):
-            user = await bot.fetch_user(uid)
-            leaderboard_text += f"{rank}. {user.name} - Kill: {pdata.get('kills', 0)}\n"
-
-        await channel.send(f"🏆 <@{winner}> menang! Game selesai.\n\n{leaderboard_text}")
-        players.clear()
-        active_zones = zones.copy()
-
+async def setup_game(interaction, mode):
+    global game_mode
+    game_mode = mode
+    players.clear()
+    await interaction.followup.send(f"Game starting in **{mode}** mode. React ✅ to join!", ephemeral=True)
+    await asyncio.sleep(15)
+    for member in interaction.guild.members:
+        if not member.bot:
+            players[member.id] = {
+                "hp": 100,
+                "weapon": random.choices(["M4A1", "AK47", "AWM", "Bazooka", "Grenade", "Vehicle"], [0.2, 0.2, 0.1, 0.005, 0.2, 0.1])[0],
+                "armor": random.choices([0,1,2,3], [0.5,0.2,0.2,0.1])[0],
+                "zone": random.choice(zones),
+                "status": "alive",
+                "mode": mode
+            }
+    shrink_zone.start()
+    handle_battle.start()
+    red_zone.start()
 
 bot.run(TOKEN)
-        
+    
